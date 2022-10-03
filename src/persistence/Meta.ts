@@ -1,3 +1,4 @@
+export type ConstructorType<T extends object = object> = new(...args: any) => T
 export interface Attribute<X, Y> {
     readonly name: string
     readonly type: Type<Y>
@@ -8,7 +9,7 @@ export interface Type<X> {
     readonly type: X
 }
 export interface BasicType<X> extends Type<X> { }
-export interface EntityType<X extends object = object> extends Type<new(...args: any) => X> {
+export interface EntityType<X extends object = object> extends Type<ConstructorType<X>> {
     readonly attributes: Iterable<Attribute<X, any>>
 }
 export interface Metamodel {
@@ -21,7 +22,7 @@ export function createAttribute<X, Y>(name: string, type: Type<Y>, association: 
 export function createBasicType<X>(type: X): BasicType<X> {
     return new BasicTypeImpl(type)
 }
-export function createEntityType<X extends object>(type: new(...args: any) => X, attributes: Iterable<Attribute<X, any>>): EntityType<X> {
+export function createEntityType<X extends object>(type: ConstructorType<X>, attributes: Iterable<Attribute<X, any>>): EntityType<X> {
     return new EntityTypeImpl(type, attributes)
 }
 export function createMetamodel(entityTypes: Iterable<EntityType>) {
@@ -36,20 +37,20 @@ class TypeImpl<X> implements Type<X> {
 }
 class BasicTypeImpl<X> extends TypeImpl<X> implements BasicType<X> { }
 class EntityTypeImpl<X extends object = object> implements EntityType<X> {
-    constructor(readonly type: new(...args: any) => X, readonly attributes: Iterable<Attribute<X, any>>) { }
+    constructor(readonly type: ConstructorType<X>, readonly attributes: Iterable<Attribute<X, any>>) { }
 }
 class MetamodelImpl implements Metamodel {
-    #entityTypes = new Map<new(...args: any) => object, EntityType>()
+    #entityTypes = new Map<ConstructorType, EntityType>()
     constructor(entityTypes: Iterable<EntityType>) {
         for (const entityType of entityTypes) {
             this.#entityTypes.set(entityType.type, entityType)
         }
     }
-    getEntityType<T extends object>(type: T): EntityType<T> {
-        let constructor = typeof type == "object" && type.constructor && typeof type.constructor == "function"
-                        ? type.constructor as new(...args: any) => T
-                        : typeof type == "function"
-                            ? type as new(...args: any) => T
+    getEntityType<T extends object>(entityOrType: T | ConstructorType<T>): EntityType<T> {
+        let constructor = typeof entityOrType == "object" && entityOrType.constructor && typeof entityOrType.constructor == "function"
+                        ? entityOrType.constructor as ConstructorType<T>
+                        : typeof entityOrType == "function"
+                            ? entityOrType as ConstructorType<T>
                             : undefined
         if (!constructor) throw Error(`IllegalArgumentException`)
         return this.#entityTypes.get(constructor)! as EntityType<T>

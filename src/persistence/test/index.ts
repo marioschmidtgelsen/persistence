@@ -1,4 +1,5 @@
 import * as Persistence from "../index.js"
+import * as assert from "assert"
 
 (async function() {
     class Author {
@@ -43,6 +44,21 @@ import * as Persistence from "../index.js"
     let book = manager.persist(new Book())
     book.title = "Hitchhiker's Guide to the Universe"
     book.author = author
-    await manager.update(book)
+    {
+        let found: Array<Author> = []
+        for await (const entity of manager.find(Author, "Adams, Douglas")) {
+            found.push(entity)
+        }
+        assert.strictEqual(found.length, 1)
+        assert.deepStrictEqual(found[0], author)
+    }
+    {
+        let updated: Array<object> = []
+        manager.onupdate(<T extends object>(entity: T) => updated.push(entity))
+        await manager.update(book)
+        assert.strictEqual(updated.length, 2)
+        assert.deepStrictEqual(updated[0], author)
+        assert.deepStrictEqual(updated[1], book)
+    }
 })()
 .catch(console.error)
