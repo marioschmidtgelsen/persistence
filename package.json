@@ -1,0 +1,16 @@
+{
+  "name": "persistence",
+  "version": "1.0.0",
+  "description": "A typescript persistence framework inspired by Apache Jakarta (JPA).",
+  "main": "index.js",
+  "dependencies": {
+    "@types/node": "^18.7.18",
+    "typescript": "^4.8.3"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Mario Schmidt [marioschmidt@edgestream.de]",
+  "license": "ISC",
+  "type": "module"
+}
