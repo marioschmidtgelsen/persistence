@@ -1,94 +1,97 @@
 import * as Meta from "./Meta.js"
 
 export type ConstructorType<T extends object = object> = new(...args: any) => T
-export interface UpdateEventListener { <T extends object>(entity: T): void }
 export interface Manager {
     readonly metamodel: Meta.Metamodel
-    contains<T extends object>(entity: T): boolean
-    detach<T extends object>(entity: T): void
-    find<T extends object>(type: ConstructorType<T>, key: any): AsyncGenerator<T>
+    flush(): Promise<void>
     persist<T extends object>(entity: T): T
     remove<T extends object>(entity: T): void
-    update<T extends object>(entity: T): Promise<void>
-    onupdate(listener: UpdateEventListener): void
+    transaction(): Transaction
 }
-export class Manager implements Manager {
-    #persisters = new Map<Meta.EntityType<any>, EntityPersister<any>>()
-    #updateEventListeners = new Set<UpdateEventListener>()
-    constructor(readonly metamodel: Meta.Metamodel) { }
-    contains<T extends object>(entity: T): boolean { return this.getEntityPersister(entity).contains(entity) }
-    detach<T extends object>(entity: T): void { return this.getEntityPersister(entity).detach(entity) }
-    async *find<T extends object>(type: ConstructorType<T>, key: any) { yield *this.getEntityPersister(type).find(key) }
-    persist<T extends object>(entity: T): T { return this.getEntityPersister(entity).persist(entity) }
-    remove<T extends object>(entity: T): void { this.getEntityPersister(entity).remove(entity) }
-    async update<T extends object>(entity: T) { return this.getEntityPersister(entity).update(entity) }
-    onupdate(listener: UpdateEventListener): void { this.#updateEventListeners.add(listener) }
-    protected createEntityPersister<T extends object>(type: Meta.EntityType<T>) {
-        let persister = new EntityPersister(this, type)
-        persister.onupdate(entity => this.emitOnUpdate(entity))
-        this.#persisters.set(type, persister)
-        return persister
-    }
-    protected getEntityPersister<T extends object>(entityOrType: T | ConstructorType<T>): EntityPersister<T> {
-        let type = this.metamodel.getEntityType(entityOrType)
-        return this.#persisters.get(type) || this.createEntityPersister(type)
-    }
-    protected emitOnUpdate<T extends object>(entity: T): void { this.#updateEventListeners.forEach(listener => listener(entity)) }
+export interface Transaction {
+    commit(): Promise<void>
+    persist<T extends object>(entity: T): T
+    key<T extends object>(entity: T): any
+    remove<T extends object>(entity: T): void
+    rollback(): Promise<void>
+}
+export interface TransactionFactory {
+    createTransaction(): Transaction
 }
 
-enum State {
+export enum State {
     LOADED,
     CREATED,
     CHANGED,
     REMOVED
 }
-class EntityPersister<T extends object> {
-    #entities = new Map<T, State>()
-    #updateEventListeners = new Set<UpdateEventListener>()
-    constructor(readonly manager: Manager, readonly type: Meta.EntityType<T>) { }
-    contains(entity: T): boolean { return this.#entities.has(entity) }
-    detach(entity: T) { this.#entities.delete(entity) }
-    async *find(key: any): AsyncGenerator<T> {
-        for (const entity of this.#entities.keys()) {
-            for (const attribute of this.type.attributes) {
-                if (attribute.key) {
-                    let value = Reflect.get(entity, attribute.name)
-                    if (key == value) yield entity
-                }
+export class Manager implements Manager {
+    #transaction?: Transaction
+    constructor(readonly metamodel: Meta.Metamodel, protected transactionFactory: TransactionFactory) { }
+    async flush() { if (this.#transaction) await this.#transaction!.commit() }
+    persist<T extends object>(entity: T): T { return this.transaction().persist(entity) }
+    remove<T extends object>(entity: T) { this.transaction().remove(entity) }
+    transaction() { return this.#transaction || (this.#transaction = this.transactionFactory.createTransaction()) }
+}
+export abstract class Transaction implements Transaction {
+    #persisters = new Map<Meta.EntityType<any>, Persister<any>>()
+    constructor(readonly manager: Manager) { }
+    async commit() { for (const [type, persister] of this.#persisters) await persister.flush() }
+    key<T extends object>(entity: T): any { return this.getPersister(entity).key(entity) }
+    persist<T extends object>(entity: T): T { return this.getPersister(entity).persist(entity) }
+    remove<T extends object>(entity: T) { this.getPersister(entity).remove(entity) }
+    async rollback() { throw Error("Method not implemented.") }
+    protected getPersister<T extends object>(entityOrType: T | ConstructorType<T>): Persister<T> {
+        let type = this.manager.metamodel.getEntityType(entityOrType)
+        let persister = this.#persisters.get(type)
+        if (persister) return persister
+        persister = this.createPersister(type)
+        this.#persisters.set(type, persister)
+        return persister
+    }
+    protected abstract createPersister<T extends object>(type: Meta.EntityType<T>): Persister<T>
+}
+export abstract class Persister<T extends object> {
+    #states = new Map<T, State>()
+    #keys = new Map<T, any>()
+    constructor(readonly transaction: Transaction, readonly type: Meta.EntityType<T>) { }
+    async flush() {
+        for (const [entity, state] of this.#states) {
+            switch (state) {
+                case (State.LOADED):
+                    break
+                case (State.CREATED):
+                    let key = await this.insertEntity(entity)
+                    this.setKey(entity, key)
+                    this.setState(entity, State.LOADED)
+                    break
             }
         }
     }
-    persist(entity: T): T { this.#entities.set(entity, State.CREATED); return entity }
-    remove(entity: T) { this.#entities.set(entity, State.REMOVED) }
-    async update(entity: T) {
-        let state = this.#entities.get(entity)!
-        switch (state) {
-            case (State.LOADED):
-                break
+    key(entity: T): any { return this.getKey(entity) }
+    persist(entity: T) { this.addState(entity, State.CREATED); return entity }
+    remove(entity: T) { this.setState(entity, State.REMOVED) }
+    protected getKey(entity: T): any { return this.#keys.get(entity) }
+    protected setKey(entity: T, key: any) { this.#keys.set(entity, key) }
+    protected addState(entity: T, state: State) { this.#states.set(entity, state) }
+    protected getState(entity: T): State { return this.#states.get(entity)! }
+    protected setState(entity: T, state: State) {
+        let origin = this.getState(entity)
+        switch (origin) {
             case (State.CREATED):
-            case (State.CHANGED):
-                await this.updateReferencedEntities(entity)
-                this.emitOnUpdate(entity)
-                this.#entities.set(entity, State.LOADED)
+                switch (state) {
+                    case (State.LOADED):
+                        this.#states.set(entity, state)
+                        break
+                    default:
+                        throw Error("IllegalStateTransition")
+                }
                 break
-            case (State.REMOVED):
-                this.detach(entity)
-                break
+            default:
+                throw Error("IllegalStateTransition")
         }
     }
-    onupdate(listener: UpdateEventListener): void { this.#updateEventListeners.add(listener) }
-    protected async *getEntityReferences(entity: T) {
-        for (const attribute of this.type.attributes) {
-            if (attribute.association) {
-                let reference = Reflect.get(entity, attribute.name) as T
-                yield reference
-            }
-        }
-    }
-    protected emitOnUpdate<T extends object>(entity: T): void { this.#updateEventListeners.forEach(listener => listener(entity)) }
-    protected async updateReferencedEntities(entity: T) {
-        for await (const reference of this.getEntityReferences(entity)) {
-            await this.manager.update(reference)
-        }
-    }
+    protected abstract insertEntity(entity: T): Promise<any>
+    protected abstract updateEntity(entity: T, key: any): Promise<any>
+    protected abstract deleteEntity(entity: T, key: any): Promise<void>
 }

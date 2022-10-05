@@ -7,11 +7,11 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Program",
+            "name": "examples\\node-datastore-ipfs",
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}\\dist\\index.js",
+            "program": "${workspaceFolder}\\dist\\examples\\node-datastore-ipfs\\index.js",
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"
             ]
