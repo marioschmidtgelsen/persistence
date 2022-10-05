@@ -21,7 +21,6 @@ class Persister<T extends object> extends Persistence.Entity.Persister<T> implem
         let node = this.createDAGNode(entity)
         let cid = await this.transaction.datastore.ipfs.dag.put(node)
         this.setKey(entity, cid)
-        console.debug(`[${this.constructor.name}<${this.type.type.name}>.${this.insertEntity.name}] Put DAG node: ${cid.toString()}`)
         return cid
     }
     protected async updateEntity(entity: T, key: any) { throw new Error("Method not implemented.") }
