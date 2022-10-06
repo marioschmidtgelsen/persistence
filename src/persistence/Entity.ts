@@ -3,10 +3,14 @@ import * as Meta from "./Meta.js"
 export type ConstructorType<T extends object = object> = new(...args: any) => T
 export interface Manager {
     readonly metamodel: Meta.Metamodel
+    find<T extends object>(type: ConstructorType<T>, key: any): Promise<T>
     flush(): Promise<void>
     persist<T extends object>(entity: T): T
     remove<T extends object>(entity: T): void
     transaction(): Transaction
+}
+export interface TransactionFactory {
+    createTransaction(): Transaction
 }
 export interface Transaction {
     commit(): Promise<void>
@@ -15,27 +19,45 @@ export interface Transaction {
     remove<T extends object>(entity: T): void
     rollback(): Promise<void>
 }
-export interface TransactionFactory {
-    createTransaction(): Transaction
+export interface QueryFactory {
+    createQuery<T extends object>(type: Meta.EntityType<T>): Query<T>
 }
-
+export interface Query<T extends object> {
+    readonly type: Meta.EntityType<T>
+    find(key: any): Promise<T>
+}
+export interface EntityFactory {
+    createEntity<T extends object>(type: Meta.EntityType<T>, value: T): T
+}
 export enum State {
     LOADED,
     CREATED,
     CHANGED,
     REMOVED
 }
+export interface ManagerOptions {
+    readonly metamodel: Meta.Metamodel
+}
 export class Manager implements Manager {
     #transaction?: Transaction
-    constructor(readonly metamodel: Meta.Metamodel, protected transactionFactory: TransactionFactory) { }
+    constructor(readonly metamodel: Meta.Metamodel, readonly queryFactory: QueryFactory, readonly transactionFactory: TransactionFactory) { }
+    async find<T extends object>(factory: ConstructorType<T>, key: any) { return this.queryFactory.createQuery(this.metamodel.getEntityType(factory)).find(key) }
     async flush() { if (this.#transaction) await this.#transaction!.commit() }
     persist<T extends object>(entity: T): T { return this.transaction().persist(entity) }
     remove<T extends object>(entity: T) { this.transaction().remove(entity) }
     transaction() { return this.#transaction || (this.#transaction = this.transactionFactory.createTransaction()) }
 }
+export class EntityFactory implements EntityFactory {
+    createEntity<T extends object>(type: Meta.EntityType<T>, value: T): T { return value }
+}
+export abstract class Query<T extends object> implements Query<T> {
+    constructor(readonly manager: Manager, readonly type: Meta.EntityType<T>, readonly entityFactory = new EntityFactory()) { }
+    async find(key: any): Promise<T> { return this.entityFactory.createEntity(this.type, await this.select(key)) }
+    protected abstract select(key: any): Promise<T>
+}
 export abstract class Transaction implements Transaction {
     #persisters = new Map<Meta.EntityType<any>, Persister<any>>()
-    constructor(readonly manager: Manager) { }
+    constructor(readonly manager: Manager, readonly entityFactory = new EntityFactory()) { }
     async commit() { for (const [type, persister] of this.#persisters) await persister.flush() }
     key<T extends object>(entity: T): any { return this.getPersister(entity).key(entity) }
     persist<T extends object>(entity: T): T { return this.getPersister(entity).persist(entity) }
@@ -61,7 +83,7 @@ export abstract class Persister<T extends object> {
                 case (State.LOADED):
                     break
                 case (State.CREATED):
-                    let key = await this.insertEntity(entity)
+                    let key = await this.insert(entity)
                     this.setKey(entity, key)
                     this.setState(entity, State.LOADED)
                     break
@@ -91,7 +113,7 @@ export abstract class Persister<T extends object> {
                 throw Error("IllegalStateTransition")
         }
     }
-    protected abstract insertEntity(entity: T): Promise<any>
-    protected abstract updateEntity(entity: T, key: any): Promise<any>
-    protected abstract deleteEntity(entity: T, key: any): Promise<void>
+    protected abstract insert(entity: T): Promise<any>
+    protected abstract update(entity: T, key: any): Promise<any>
+    protected abstract delete(entity: T, key: any): Promise<void>
 }
