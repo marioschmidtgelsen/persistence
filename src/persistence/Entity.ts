@@ -9,6 +9,9 @@ export interface Manager {
     remove<T extends object>(entity: T): void
     transaction(): Transaction
 }
+export interface EntityFactory {
+    <T extends object>(type: Meta.EntityType<T>, value: T): T
+}
 export interface TransactionFactory {
     (): Transaction
 }
@@ -24,9 +27,6 @@ export interface QueryFactory {
 export interface Query {
     find<T extends object>(factory: ConstructorType<T>, key: any): Promise<T>
 }
-export interface EntityFactory {
-    <T extends object>(type: Meta.EntityType<T>, value: T): T
-}
 export enum State {
     LOADED,
     CREATED,
@@ -37,16 +37,16 @@ export class Manager implements Manager {
     #transaction?: Transaction
     constructor(
         readonly metamodel: Meta.Metamodel,
-        readonly queryFactory: QueryFactory,
-        readonly transactionFactory: TransactionFactory,
-        readonly entityFactory = EntityFactory.createEntity,
+        readonly createQuery: QueryFactory,
+        readonly createTransaction: TransactionFactory,
+        readonly createEntity = EntityFactory.createEntity,
         readonly cache = new Cache()) {
     }
-    async find<T extends object>(factory: ConstructorType<T>, key: any): Promise<T> { return this.queryFactory().find(factory, key) }
+    async find<T extends object>(factory: ConstructorType<T>, key: any): Promise<T> { return this.createQuery().find(factory, key) }
     async flush() { if (this.#transaction) await this.#transaction!.commit() }
     persist<T extends object>(entity: T): T { return this.transaction().persist(entity) }
     remove<T extends object>(entity: T) { this.transaction().remove(entity) }
-    transaction() { return this.#transaction || (this.#transaction = this.transactionFactory()) }
+    transaction() { return this.#transaction || (this.#transaction = this.createTransaction()) }
 }
 export class EntityFactory implements EntityFactory {
     static createEntity<T extends object>(type: Meta.EntityType<T>, value: T): T { return value }
@@ -55,18 +55,22 @@ export abstract class Query implements Query {
     constructor(readonly manager: Manager) { }
     async find<T extends object>(factory: ConstructorType<T>, key: any): Promise<T> {
         let type = this.manager.metamodel.getEntityType(factory)
-        let entity = this.manager.cache.get(type, key)
+        let entity = this.manager.cache.entity(type, key)
         if (entity) return entity
         let value = await this.select(type, key)
-        entity = this.manager.entityFactory(type, value)
+        entity = this.manager.createEntity(type, value)
+        this.manager.cache.set(type, entity, key)
         return entity
     }
     protected abstract select<T extends object>(type: Meta.EntityType<T>, key: any): Promise<T>
 }
 export abstract class Transaction implements Transaction {
     #persisters = new Map<Meta.EntityType<any>, Persister<any>>()
-    constructor(readonly manager: Manager) { }
-    async commit() { for (const [type, persister] of this.#persisters) await persister.flush() }
+    constructor(readonly manager: Manager, readonly cache = new Cache(manager.cache)) { }
+    async commit() {
+        for (const [type, persister] of this.#persisters) await persister.flush()
+        this.manager.cache.merge(this.cache)
+    }
     persist<T extends object>(entity: T): T { return this.getPersister(entity).persist(entity) }
     remove<T extends object>(entity: T) { this.getPersister(entity).remove(entity) }
     async rollback() { throw Error("Method not implemented.") }
@@ -90,8 +94,8 @@ export abstract class Persister<T extends object> {
                     break
                 case (State.CREATED):
                     let key = await this.insert(entity)
-                    this.transaction.manager.cache.set(entity, this.type, key)
                     this.transition(entity, State.LOADED)
+                    this.transaction.cache.set(this.type, entity, key)
                     break
             }
         }
@@ -130,14 +134,53 @@ export abstract class Persister<T extends object> {
     protected abstract delete(entity: T, key: any): Promise<void>
 }
 /**
- * Entity cache implementation based on maps per entity type.
+ * Implementation of a double mapped list
  */
- class Cache {
-    private entries = new Map<Meta.EntityType<any>, Map<any, object>>()
-    constructor() { }
-    get<T extends object>(type: Meta.EntityType<T>, key: any): T | undefined { return this.getOrSetEntry(type).get(key) }
-    set<T extends object>(entity: T, type: Meta.EntityType<T>, key: any) { this.getOrSetEntry(type).set(key, entity) }
-    protected getEntry<T extends object>(type: Meta.EntityType<T>): Map<any, T> { return this.entries.get(type) as Map<any, T> }
-    protected getOrSetEntry<T extends object>(type: Meta.EntityType<T>): Map<any, T> { return this.getEntry(type) || this.setEntry(type) }
-    protected setEntry<T extends object>(type: Meta.EntityType<T>) { let entities = new Map<any, T>(); this.entries.set(type, entities); return entities }
+class KeyValueMap<K = any, V = any> implements Iterable<[K, V]> {
+    private keymap = new Map<K, V>()
+    private valmap = new Map<V, K>()
+    key(value: V): K | undefined { return this.valmap.get(value) }
+    value(key: any): V | undefined { return this.keymap.get(key) }
+    set(key: any, value: V) { this.keymap.set(key, value); this.valmap.set(value, key) }
+    [Symbol.iterator]() { return this.keymap.entries() }
+}
+/**
+ * Implementation of a hierarchical entity cache using double mapped lists per entity type
+ */
+class Cache {
+    private entries = new Map<Meta.EntityType<any>, KeyValueMap<any, object>>()
+    constructor(readonly parent?: Cache) { }
+    entity<T extends object>(type: Meta.EntityType<T>, key: any): T | undefined {
+        return this.getEntry(type)?.value(key)
+            || this.parent?.entity(type, key)
+    }
+    key<T extends object>(type: Meta.EntityType<T>, entity: T): any {
+        return this.getEntry(type)?.key(entity)
+            || this.parent?.key(type, entity)
+    }
+    merge(source: Cache) {
+        for (const [type, entries] of source.entries) {
+            let target = this.getEntry(type)
+            if (!target) this.entries.set(type, entries)
+            else {
+                for (const [key, entity] of entries) {
+                    target.set(key, entity)
+                }
+            }
+        }
+    }
+    set<T extends object>(type: Meta.EntityType<T>, entity: T, key: any) {
+        this.getOrSetEntry(type).set(key, entity)
+    }
+    protected getEntry<T extends object>(type: Meta.EntityType<T>): KeyValueMap<any, T> | undefined {
+        return this.entries.get(type) as KeyValueMap<any, T>
+    }
+    protected getOrSetEntry<T extends object>(type: Meta.EntityType<T>): KeyValueMap<any, T> {
+        return this.getEntry(type) || this.setEntry(type)
+    }
+    protected setEntry<T extends object>(type: Meta.EntityType<T>) {
+        let entries = new KeyValueMap<any, T>()
+        this.entries.set(type, entries)
+        return entries
+    }
 }

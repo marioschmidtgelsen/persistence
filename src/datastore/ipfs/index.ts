@@ -1,16 +1,20 @@
 import * as Persistence from "../../persistence/index.js"
 import * as IPFSHTTPClient from "ipfs-http-client"
 
-export class DataStore {
+export interface DataStore {
     readonly ipfs: IPFSHTTPClient.IPFSHTTPClient
     readonly manager: Persistence.Entity.Manager
-    constructor(readonly metamodel: Persistence.Meta.Metamodel, readonly options: IPFSHTTPClient.Options = { url: "http://localhost:5001" }) {
+}
+export function createDataStore(metamodel: Persistence.Meta.Metamodel, options: IPFSHTTPClient.Options = { url: "http://localhost:5001" }) {
+    return new DataStoreImpl(metamodel, options)
+}
+
+class DataStoreImpl implements DataStore {
+    readonly ipfs: IPFSHTTPClient.IPFSHTTPClient
+    readonly manager: Persistence.Entity.Manager
+    constructor(readonly metamodel: Persistence.Meta.Metamodel, readonly options: IPFSHTTPClient.Options) {
         this.ipfs = IPFSHTTPClient.create(options)
-        this.manager = new Persistence.Entity.Manager(
-            metamodel,
-            () => new Query(this),
-            () => new Transaction(this)
-        )
+        this.manager = new Persistence.Entity.Manager(metamodel, () => new Query(this), () => new Transaction(this))
     }
 }
 class Query extends Persistence.Entity.Query implements Persistence.Entity.Query {
@@ -22,7 +26,7 @@ class Query extends Persistence.Entity.Query implements Persistence.Entity.Query
         for (const attribute of type.attributes) {
             if (attribute.association) {
                 const key = Reflect.get(node.value, attribute.name)
-                const value = await this.datastore.manager.find(attribute.type.factory, key)
+                const value = await this.find(attribute.type.factory, key)
                 const result = Reflect.set(entity, attribute.name, value)
                 if (!result) throw new Error("IllegalAccessException")
             } else {
@@ -46,7 +50,9 @@ class Persister<T extends object> extends Persistence.Entity.Persister<T> implem
         for (const attribute of this.type.attributes) {
             if (attribute.association) {
                 let value = Reflect.get(entity, attribute.name) as object
-                entries.set(attribute.name, value)
+                let key = this.transaction.cache.key(attribute.type as Persistence.Meta.EntityType, value)
+                let cid = IPFSHTTPClient.CID.parse(key)
+                entries.set(attribute.name, cid)
             }
             else {
                 let value = Reflect.get(entity, attribute.name)

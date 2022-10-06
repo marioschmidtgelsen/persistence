@@ -1,21 +1,24 @@
 import { Author, Book } from "./BooksModel.js"
-import { Repository } from "./BooksTypes.js"
-import { DataStore } from "../../datastore/ipfs/index.js"
+import { AuthorType, BookType, Repository } from "./BooksTypes.js"
+import { createDataStore } from "../../datastore/ipfs/index.js"
+import * as assert from "assert"
 
-let datastore = new DataStore(Repository)
 {
-    let author = datastore.manager.persist(new Author())
+    const datastore = createDataStore(Repository)
+    const author = datastore.manager.persist(new Author())
     author.firstname = "Douglas"
     author.lastname = "Adams"
-    let book = datastore.manager.persist(new Book())
+    const book = datastore.manager.persist(new Book())
     book.title = "Hitchhiker's Guide to the Universe"
     book.author = author
     await datastore.manager.flush()
+    const key = datastore.manager.cache.key(BookType, book)
+    assert.strictEqual(key, "bafyreiftf6ezielotf46den32naywudczeemlxqfzyzoplxzzwfsj2hy4y")
 }
 {
-    const key = "bafyreibpqbzy4qpyz7mkor6g6t6e4ljzur4cbcv46wrq2ranh45dtc3bjq"
-    let author = await datastore.manager.find(Author, key)
-    console.info(`Book loaded from DAG node: ${key}`)
-    let fullname = author.fullname
-    debugger
+    const datastore = createDataStore(Repository)
+    const book = await datastore.manager.find(Book, "bafyreiftf6ezielotf46den32naywudczeemlxqfzyzoplxzzwfsj2hy4y")
+    assert.strictEqual(book.title, "Hitchhiker's Guide to the Universe")
+    assert.ok(book.author)
+    assert.strictEqual(book.author?.fullname, "Adams, Douglas")
 }
