@@ -1,26 +1,24 @@
 import * as Persistence from "../../persistence/index.js"
 import * as IPFSHTTPClient from "ipfs-http-client"
 
-export class DataStore implements Persistence.Entity.QueryFactory, Persistence.Entity.TransactionFactory {
+export class DataStore {
     readonly ipfs: IPFSHTTPClient.IPFSHTTPClient
     readonly manager: Persistence.Entity.Manager
     constructor(readonly metamodel: Persistence.Meta.Metamodel, readonly options: IPFSHTTPClient.Options = { url: "http://localhost:5001" }) {
         this.ipfs = IPFSHTTPClient.create(options)
-        this.manager = new Persistence.Entity.Manager(metamodel, this, this)
+        this.manager = new Persistence.Entity.Manager(metamodel, () => new Query(this), () => new Transaction(this))
     }
-    createQuery<T extends object>(type: Persistence.Meta.EntityType<T>) { return new Query(this, type) }
-    createTransaction() { return new Transaction(this) }
 }
-class Query<T extends object> extends Persistence.Entity.Query<T> implements Persistence.Entity.Query<T> {
-    constructor(readonly datastore: DataStore, readonly type: Persistence.Meta.EntityType<T>) { super(datastore.manager, type) }
-    protected async select(key: any): Promise<T> {
+class Query extends Persistence.Entity.Query implements Persistence.Entity.Query {
+    constructor(readonly datastore: DataStore) { super(datastore.manager.metamodel) }
+    protected async select<T extends object>(type: Persistence.Meta.EntityType<T>, key: any): Promise<T> {
         const cid = typeof key == "string" ? IPFSHTTPClient.CID.parse(key) : key
         const node = await this.datastore.ipfs.dag.get(cid!)
-        const entity = new this.type.type()
-        for (const attribute of this.type.attributes) {
+        const entity = new type.factory()
+        for (const attribute of type.attributes) {
             if (attribute.association) {
                 const key = Reflect.get(node.value, attribute.name)
-                const value = await this.datastore.manager.find(attribute.type.type, key)
+                const value = await this.datastore.manager.find(attribute.type.factory, key)
                 const result = Reflect.set(entity, attribute.name, value)
                 if (!result) throw new Error("IllegalAccessException")
             } else {
@@ -33,7 +31,7 @@ class Query<T extends object> extends Persistence.Entity.Query<T> implements Per
     }
 }
 class Transaction extends Persistence.Entity.Transaction implements Persistence.Entity.Transaction {
-    constructor(readonly datastore: DataStore) { super(datastore.manager) }
+    constructor(readonly datastore: DataStore) { super(datastore.manager.metamodel) }
     protected createPersister<T extends object>(type: Persistence.Meta.EntityType<T>) { return new Persister(this, type) }
 }
 class Persister<T extends object> extends Persistence.Entity.Persister<T> implements Persistence.Entity.Persister<T> {

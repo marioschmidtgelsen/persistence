@@ -17,4 +17,6 @@ let datastore = new DataStore(Repository)
     const key = "bafyreiftf6ezielotf46den32naywudczeemlxqfzyzoplxzzwfsj2hy4y"
     let book = await datastore.manager.find(Book, key)
     console.info(`Book loaded from DAG node: ${key}`)
+    let fullname = book.author?.fullname
+    debugger
 }
