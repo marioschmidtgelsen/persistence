@@ -11,12 +11,11 @@ let datastore = new DataStore(Repository)
     book.title = "Hitchhiker's Guide to the Universe"
     book.author = author
     await datastore.manager.flush()
-    console.info(`Book stored as DAG node: ${datastore.manager.transaction().key(book)}`) // bafyreiftf6ezielotf46den32naywudczeemlxqfzyzoplxzzwfsj2hy4y
 }
 {
-    const key = "bafyreiftf6ezielotf46den32naywudczeemlxqfzyzoplxzzwfsj2hy4y"
-    let book = await datastore.manager.find(Book, key)
+    const key = "bafyreibpqbzy4qpyz7mkor6g6t6e4ljzur4cbcv46wrq2ranh45dtc3bjq"
+    let author = await datastore.manager.find(Author, key)
     console.info(`Book loaded from DAG node: ${key}`)
-    let fullname = book.author?.fullname
+    let fullname = author.fullname
     debugger
 }
