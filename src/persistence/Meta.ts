@@ -11,13 +11,13 @@ export interface Type<X> {
 export interface BasicType<X> extends Type<X> { }
 export interface EntityType<X extends object = object> extends Type<ConstructorType<X>> {
     readonly attributes: Iterable<Attribute<X, any>>
+    getAttribute<Y>(name: string | symbol): Attribute<X, Y>
 }
 export interface Metamodel {
     getEntityType<T extends object>(type: T | ConstructorType<T>): EntityType<T>
 }
-
-export function createAttribute<X, Y>(name: string, type: Type<Y>, association: boolean = false, key: boolean = false): Attribute<X, Y> {
-    return new AttributeImpl(name, type, association, key)
+export function createAttribute<X, Y>(values: { name: string, type: Type<Y>, association: boolean, key: boolean }): Attribute<X, Y> {
+    return new AttributeImpl(values.name, values.type, values.association, values.key)
 }
 export function createBasicType<X>(type: X): BasicType<X> {
     return new BasicTypeImpl(type)
@@ -37,7 +37,11 @@ class TypeImpl<X> implements Type<X> {
 }
 class BasicTypeImpl<X> extends TypeImpl<X> implements BasicType<X> { }
 class EntityTypeImpl<X extends object = object> implements EntityType<X> {
-    constructor(readonly factory: ConstructorType<X>, readonly attributes: Iterable<Attribute<X, any>>) { }
+    #attributes = new Map<string | symbol, Attribute<X, any>>
+    constructor(readonly factory: ConstructorType<X>, readonly attributes: Iterable<Attribute<X, any>>) {
+        for (const attribute of attributes) this.#attributes.set(attribute.name, attribute)
+    }
+    getAttribute<Y>(name: string | symbol): Attribute<X, Y> { return this.#attributes.get(name)! }
 }
 class MetamodelImpl implements Metamodel {
     #entityTypes = new Map<ConstructorType, EntityType>()
